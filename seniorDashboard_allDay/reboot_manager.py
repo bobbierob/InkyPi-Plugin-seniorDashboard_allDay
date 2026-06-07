@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 # Kept long enough to avoid fast boot-loops if the WLAN stays down after a reboot.
 REBOOT_DELAY_SECONDS = 600  # 10 minutes
 
+# Maximum number of consecutive auto-reboots before the plugin stops rebooting and just keeps
+# showing the error/offline screen. Prevents an endless reboot loop on a persistent problem
+# (router truly down, permanently broken calendar URL, render bug). The plugin persists the
+# count across reboots and resets it as soon as a normal update succeeds.
+MAX_CONSECUTIVE_REBOOTS = 3
+
 _lock = threading.Lock()
 _timer = None
 _reboot_at = None
@@ -49,7 +55,7 @@ def schedule_reboot(delay_seconds, reboot_at_dt):
         _timer.daemon = True
         _timer.start()
         logger.warning(
-            f"Connectivity lost -- reboot scheduled in {delay_seconds:.0f}s (at {_reboot_at})"
+            f"Reboot scheduled in {delay_seconds:.0f}s (at {_reboot_at}) due to a failed update"
         )
         return _reboot_at
 

@@ -37,6 +37,11 @@ LABELS = {
         "offlineMessage": "The device will restart automatically at",
         "offlineClock": "",
         "offlineReassure": "Please wait a moment.",
+        "errorTitle": "Update failed",
+        "errorMessage": "There was a problem updating.",
+        "rebootPrefix": "Automatic restart at",
+        "configMessage": "No calendar configured.",
+        "noRebootNote": "Persistent problem - please ask for help.",
     },
     "de": {
         "allDayText": "Ganztägig",
@@ -49,6 +54,11 @@ LABELS = {
         "offlineMessage": "Das Gerät startet automatisch neu um",
         "offlineClock": "Uhr",
         "offlineReassure": "Bitte einen Moment Geduld.",
+        "errorTitle": "Aktualisierung fehlgeschlagen",
+        "errorMessage": "Es gab ein Problem beim Aktualisieren.",
+        "rebootPrefix": "Automatischer Neustart um",
+        "configMessage": "Kein Kalender eingerichtet.",
+        "noRebootNote": "Anhaltendes Problem - bitte Hilfe holen.",
     },
     "es": {
         "allDayText": "Todo el día",
@@ -61,6 +71,11 @@ LABELS = {
         "offlineMessage": "El dispositivo se reiniciará automáticamente a las",
         "offlineClock": "",
         "offlineReassure": "Por favor, espere un momento.",
+        "errorTitle": "Error de actualización",
+        "errorMessage": "Hubo un problema al actualizar.",
+        "rebootPrefix": "Reinicio automático a las",
+        "configMessage": "Ningún calendario configurado.",
+        "noRebootNote": "Problema persistente: por favor pida ayuda.",
     },
     "fr": {
         "allDayText": "Toute la journée",
@@ -73,6 +88,11 @@ LABELS = {
         "offlineMessage": "L'appareil redémarrera automatiquement à",
         "offlineClock": "",
         "offlineReassure": "Veuillez patienter un instant.",
+        "errorTitle": "Échec de la mise à jour",
+        "errorMessage": "Un problème est survenu lors de la mise à jour.",
+        "rebootPrefix": "Redémarrage automatique à",
+        "configMessage": "Aucun calendrier configuré.",
+        "noRebootNote": "Problème persistant - veuillez demander de l'aide.",
     },
 }
 

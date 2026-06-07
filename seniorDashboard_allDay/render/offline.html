@@ -15,15 +15,20 @@
 
     <div class="offline-icon">⚠️</div>
 
-    <div class="offline-title">{{ labels.offlineTitle }}</div>
+    <div class="offline-title">{{ title }}</div>
 
+    {% if message %}
+    <div class="offline-message">{{ message }}</div>
+    {% endif %}
+
+    {% if reboot_time %}
     <div class="offline-message">
-        {{ labels.offlineMessage }}
-        <span class="offline-time">{{ reboot_time }}{% if labels.offlineClock %} {{ labels.offlineClock }}{% endif %}</span>
+        {% if reboot_prefix %}{{ reboot_prefix }} {% endif %}<span class="offline-time">{{ reboot_time }}</span>
     </div>
+    {% endif %}
 
-    {% if labels.offlineReassure %}
-    <div class="offline-reassure">{{ labels.offlineReassure }}</div>
+    {% if note %}
+    <div class="offline-reassure">{{ note }}</div>
     {% endif %}
 </div>
 

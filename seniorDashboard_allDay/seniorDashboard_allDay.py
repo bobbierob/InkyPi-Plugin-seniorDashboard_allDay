@@ -1,8 +1,9 @@
 from plugins.base_plugin.base_plugin import BasePlugin
 from plugins.seniorDashboard_allDay.constants import LOCALE_MAP, LABELS, FONT_SIZES, WEATHER_ICONS
 from plugins.seniorDashboard_allDay import reboot_manager
-from plugins.seniorDashboard_allDay.reboot_manager import REBOOT_DELAY_SECONDS
-from PIL import ImageColor
+from plugins.seniorDashboard_allDay.reboot_manager import REBOOT_DELAY_SECONDS, MAX_CONSECUTIVE_REBOOTS
+from utils.app_utils import get_font
+from PIL import ImageColor, Image, ImageDraw
 import icalendar
 import recurring_ical_events
 import logging
@@ -12,6 +13,10 @@ import pytz
 
 logger = logging.getLogger(__name__)
 
+# device.json key for the persisted consecutive-reboot counter (survives reboots).
+FAILCOUNT_KEY = "seniorDashboard_allDay_reboot_count"
+
+
 class SeniorDashboardAllDay(BasePlugin):
     def generate_settings_template(self):
         template_params = super().generate_settings_template()
@@ -20,25 +25,42 @@ class SeniorDashboardAllDay(BasePlugin):
         return template_params
 
     def generate_image(self, settings, device_config):
+        """Never fail silently. Always return an image: the dashboard when all is well, or a
+        localized status/error screen (with the current date) otherwise -- and schedule an
+        auto-reboot to recover, bounded by a consecutive-reboot cap.
+
+        Failure handling is layered:
+          1. Missing calendar config -> error screen, no reboot (a reboot can't add a URL).
+          2. Network unreachable      -> offline screen + reboot (the dead-WLAN case).
+          3. Any other failure (calendar HTTP/parse error, render glitch, ...) -> error screen;
+             reboot only if the network is actually down, else still show the error.
+        """
         calendar_urls = settings.get('calendarURLs[]')
-        if not calendar_urls:
-            raise RuntimeError("At least one calendar URL is required")
-        for url in calendar_urls:
-            if not url.strip():
-                raise RuntimeError("Invalid calendar URL")
+        try:
+            # 1. Configuration check
+            if not calendar_urls or not any((u or '').strip() for u in calendar_urls):
+                logger.warning("seniorDashboard: no calendar URL configured")
+                return self._handle_failure(device_config, settings, reason="config", urls=calendar_urls)
 
-        # Network reachability gate: if the calendar(s) cannot be reached due to a network
-        # failure (dead WLAN), show a localized offline screen and schedule an automatic
-        # reboot to recover. If we are online, cancel any reboot that was pending.
-        if not self._check_connectivity(calendar_urls):
-            tz = pytz.timezone(device_config.get_config("timezone", default="America/New_York"))
-            reboot_at = reboot_manager.schedule_reboot(
-                REBOOT_DELAY_SECONDS,
-                datetime.now(tz) + timedelta(seconds=REBOOT_DELAY_SECONDS),
-            )
-            return self._render_offline_image(settings, device_config, reboot_at)
-        reboot_manager.cancel_reboot()
+            # 2. Network reachability gate
+            if not self._check_connectivity(calendar_urls):
+                return self._handle_failure(device_config, settings, reason="offline", urls=calendar_urls)
 
+            # 3. Online: build the dashboard
+            image = self._render_dashboard(settings, device_config, calendar_urls)
+            if not image:
+                raise RuntimeError("Failed to take screenshot, please check logs.")
+
+            # Success: clear any pending reboot and reset the failure counter.
+            reboot_manager.cancel_reboot()
+            self._reset_failure_count(device_config)
+            return image
+        except Exception:
+            logger.exception("seniorDashboard: update failed; showing error screen")
+            return self._handle_failure(device_config, settings, reason="error", urls=calendar_urls)
+
+    def _render_dashboard(self, settings, device_config, calendar_urls):
+        """Build the normal dashboard image (raises on any fetch/render problem)."""
         calendar_colors = settings.get('calendarColors[]')
         default_color = '#007BFF'
         if not calendar_colors or len(calendar_colors) < len(calendar_urls):
@@ -278,40 +300,175 @@ class SeniorDashboardAllDay(BasePlugin):
                 return True
         return False
 
-    def _render_offline_image(self, settings, device_config, reboot_at):
-        """Render the localized 'no connection / auto-reboot' screen."""
+    # ----- Failure handling (never raises; always returns an image) -----
+
+    def _get_failure_count(self, device_config):
+        try:
+            return int(device_config.get_config(FAILCOUNT_KEY, default=0) or 0)
+        except Exception:
+            return 0
+
+    def _set_failure_count(self, device_config, value):
+        try:
+            device_config.update_value(FAILCOUNT_KEY, int(value), write=True)
+        except Exception:
+            logger.warning("seniorDashboard: could not persist reboot count", exc_info=True)
+
+    def _reset_failure_count(self, device_config):
+        if self._get_failure_count(device_config) != 0:
+            self._set_failure_count(device_config, 0)
+
+    def _format_reboot_time(self, device_config, reboot_at, labels):
+        """Format a reboot time as e.g. '13:40 Uhr' / '1:40 PM', honoring 12h/24h + locale clock suffix."""
+        timezone = device_config.get_config("timezone", default="America/New_York")
+        time_format = device_config.get_config("time_format", default="12h")
+        local = reboot_at.astimezone(pytz.timezone(timezone))
+        if time_format == "12h":
+            s = local.strftime("%I:%M %p").lstrip("0")
+        else:
+            s = local.strftime("%H:%M")
+        return f"{s} {labels.get('offlineClock', '')}".strip()
+
+    def _handle_failure(self, device_config, settings, reason, urls):
+        """Render a localized status/error screen and (per policy) schedule a capped reboot.
+
+        reason: 'config' (no calendar configured -> never reboot),
+                'offline' (network down -> reboot), or
+                'error' (any other failure -> reboot only if the network is actually down now).
+        Must never raise: falls back to a pure-PIL screen, then to a blank image.
+        """
+        try:
+            locale_code = settings.get("language") or "en"
+            labels = LABELS.get(locale_code, LABELS["en"])
+
+            # Config errors are not recoverable by a reboot.
+            if reason == "config":
+                return self._render_status_image(
+                    settings, device_config,
+                    title=labels.get("errorTitle", "Error"),
+                    message=labels.get("configMessage", ""),
+                    reboot_prefix=None, reboot_time=None, note=None)
+
+            # An "error" may actually be a network drop mid-update -> reclassify as offline.
+            if reason == "error":
+                try:
+                    if urls and not self._check_connectivity(urls):
+                        reason = "offline"
+                except Exception:
+                    pass
+
+            # Reboot decision, bounded by the consecutive-reboot cap.
+            reboot_time_str = None
+            pending = reboot_manager.get_scheduled_reboot()
+            if pending is not None:
+                # Already scheduled in this process -> keep the same time (stable display).
+                reboot_time_str = self._format_reboot_time(device_config, pending, labels)
+            else:
+                count = self._get_failure_count(device_config)
+                if count < MAX_CONSECUTIVE_REBOOTS:
+                    self._set_failure_count(device_config, count + 1)
+                    tz = pytz.timezone(device_config.get_config("timezone", default="America/New_York"))
+                    reboot_at = reboot_manager.schedule_reboot(
+                        REBOOT_DELAY_SECONDS, datetime.now(tz) + timedelta(seconds=REBOOT_DELAY_SECONDS))
+                    reboot_time_str = self._format_reboot_time(device_config, reboot_at, labels)
+                else:
+                    reboot_manager.cancel_reboot()
+                    logger.warning(
+                        "seniorDashboard: reboot cap (%d) reached -> not rebooting, just showing screen",
+                        MAX_CONSECUTIVE_REBOOTS)
+
+            # Pick localized strings for the chosen reason.
+            if reason == "offline":
+                title = labels.get("offlineTitle", "No internet connection")
+                message = None
+                reboot_prefix = labels.get("offlineMessage")
+            else:  # error
+                title = labels.get("errorTitle", "Update failed")
+                message = labels.get("errorMessage")
+                reboot_prefix = labels.get("rebootPrefix")
+
+            if reboot_time_str:
+                note = labels.get("offlineReassure")
+            else:
+                # Cap reached: drop the reboot line, show the persistent-problem note instead.
+                reboot_prefix = None
+                note = labels.get("noRebootNote")
+
+            return self._render_status_image(
+                settings, device_config,
+                title=title, message=message,
+                reboot_prefix=reboot_prefix, reboot_time=reboot_time_str, note=note)
+        except Exception:
+            logger.exception("seniorDashboard: failure handler crashed; emergency PIL screen")
+            try:
+                return self._render_status_pil(device_config, "Error", None, None, None, None)
+            except Exception:
+                w, h = device_config.get_resolution()
+                return Image.new("RGB", (w, h), "white")
+
+    def _render_status_image(self, settings, device_config, title, message,
+                             reboot_prefix, reboot_time, note):
+        """Render the status/error screen via HTML; fall back to pure PIL if Chromium fails."""
         dimensions = device_config.get_resolution()
         if device_config.get_config("orientation") == "vertical":
             dimensions = dimensions[::-1]
-
         timezone = device_config.get_config("timezone", default="America/New_York")
-        time_format = device_config.get_config("time_format", default="12h")
-        tz = pytz.timezone(timezone)
-
         locale_code = settings.get("language") or "en"
-        labels = LABELS.get(locale_code, LABELS["en"])
-
-        # Format the reboot time honoring the device's 12h/24h preference.
-        reboot_local = reboot_at.astimezone(tz)
-        if time_format == "12h":
-            reboot_time_str = reboot_local.strftime("%I:%M %p").lstrip("0")
-        else:
-            reboot_time_str = reboot_local.strftime("%H:%M")
+        tz = pytz.timezone(timezone)
 
         template_params = {
             "current_dt": datetime.now(tz).isoformat(),
             "timezone": timezone,
             "locale_code": locale_code,
-            "labels": labels,
-            "reboot_time": reboot_time_str,
+            "title": title,
+            "message": message,
+            "reboot_prefix": reboot_prefix,
+            "reboot_time": reboot_time,
+            "note": note,
             "font_scale": FONT_SIZES.get(settings.get("fontSize", "normal")),
             "plugin_settings": settings,
         }
+        try:
+            image = self.render_image(dimensions, "offline.html", "offline.css", template_params)
+            if image:
+                return image
+            logger.warning("seniorDashboard: status render returned None; PIL fallback")
+        except Exception:
+            logger.exception("seniorDashboard: status HTML render failed; PIL fallback")
+        return self._render_status_pil(device_config, title, message, reboot_prefix, reboot_time, note)
 
-        image = self.render_image(dimensions, "offline.html", "offline.css", template_params)
-        if not image:
-            raise RuntimeError("Failed to take screenshot, please check logs.")
-        return image
+    def _render_status_pil(self, device_config, title, message, reboot_prefix, reboot_time, note):
+        """Last-resort status screen drawn with PIL only (no Chromium dependency)."""
+        dimensions = device_config.get_resolution()
+        if device_config.get_config("orientation") == "vertical":
+            dimensions = dimensions[::-1]
+        w, h = dimensions
+        tz = pytz.timezone(device_config.get_config("timezone", default="America/New_York"))
+        now = datetime.now(tz)
+
+        img = Image.new("RGB", (w, h), "white")
+        draw = ImageDraw.Draw(img)
+
+        # (text, y-fraction, font-size-fraction, weight, color); skip empty lines.
+        reboot_line = None
+        if reboot_time:
+            reboot_line = f"{reboot_prefix} {reboot_time}".strip() if reboot_prefix else reboot_time
+        rows = [
+            (now.strftime("%d.%m.%Y"), 0.16, 0.085, "bold", (0, 0, 0)),
+            (title, 0.36, 0.075, "bold", (200, 0, 0)),
+            (message, 0.50, 0.050, "normal", (0, 0, 0)),
+            (reboot_line, 0.64, 0.060, "bold", (0, 0, 200)),
+            (note, 0.80, 0.045, "normal", (0, 0, 0)),
+        ]
+        for text, yf, sf, weight, color in rows:
+            if not text:
+                continue
+            try:
+                font = get_font("Jost", int(h * sf), weight)
+                draw.text((w / 2, h * yf), text, font=font, fill=color, anchor="mm")
+            except Exception:
+                logger.warning("seniorDashboard: PIL draw failed for a line", exc_info=True)
+        return img
 
     def fetch_calendar(self, calendar_url):
         calendar_url = self._normalize_url(calendar_url)
