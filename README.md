@@ -6,7 +6,7 @@
 **What it does:**
 
 - **Calendar** — Displays today and the next two of days in a list. Events that have already ended are hidden. 
-- **Weather** — Shows current conditions and a short forecast (e.g. tomorrow and the day after) in a minimal layout: icon and temperature, with high/low for the next days.
+- **Weather** — Shows current conditions and a short forecast (e.g. tomorrow and the day after) in a minimal layout: icon and temperature, with high/low for the next days. Temperatures can be shown in **°C or °F** (selectable in the settings) and are fetched for the **location you set** on the map.
 It uses the DWD (Deutscher Wetter Dienst) free API, so no API-key config needed.
 - **Always shows real data, even offline** — When the internet connection drops, the plugin keeps showing a normal dashboard built from the **last successfully fetched data** (correct current date, your appointments, last weather) instead of an error screen, and quietly reboots to try to restore the connection. A small corner indicator tells you at a glance whether the data is live. See [Offline behaviour & auto-recovery](#offline-behaviour--auto-recovery) below.
 
@@ -22,7 +22,8 @@ No additional dependencies whatsoever.
 Language can be set to **English**, **French** , **Spanish**  or **German**. 
 Other languages can easily be added in *constants.py*, just make sure to use the correct international language ID so the calendar returns correct dates/formats.
 You can add multiple calendars, they will all be used to compile the today, tomorrow and day after tomorrow list.
-Location setting for the weather (DWD supplies world wide weather info).
+Location setting for the weather, picked on a map (DWD supplies world wide weather info); the weather is fetched for exactly that spot.
+Temperature unit can be set to **Celsius (°C)** or **Fahrenheit (°F)**; the conversion is done by the weather API so the values are always correct.
 Font size for the Calendar listing.
 
 

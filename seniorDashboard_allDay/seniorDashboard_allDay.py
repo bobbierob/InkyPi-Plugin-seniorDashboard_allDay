@@ -22,6 +22,10 @@ CACHE_KEY = "seniorDashboard_allDay_cache"
 # indicator (green dot at 0, the number otherwise) and is reset on a successful fetch.
 STALE_COUNT_KEY = "seniorDashboard_allDay_stale_count"
 
+# Fallback weather coordinates (Darmstadt, DE) used when the settings map picker has no location set.
+DEFAULT_WEATHER_LAT = 49.8728
+DEFAULT_WEATHER_LON = 8.6512
+
 
 class SeniorDashboardAllDay(BasePlugin):
     def generate_settings_template(self):
@@ -117,6 +121,8 @@ class SeniorDashboardAllDay(BasePlugin):
 
         timezone = device_config.get_config("timezone", default="America/New_York")
         locale_code = settings.get("language") or "en"
+        units = settings.get("temperatureUnit") or "metric"
+        latitude, longitude = self._get_weather_coords(settings)
         tz = pytz.timezone(timezone)
 
         current_dt = datetime.now(tz)
@@ -130,7 +136,7 @@ class SeniorDashboardAllDay(BasePlugin):
         # The weather API hiccups independently of the calendar (e.g. a transient 502). When it does,
         # don't blank the weather / clobber the cache -- reuse the last-known-good cached weather so a
         # weather outage never wipes the weather block while the calendar is still updating fine.
-        weather_data = self.fetch_weather_data(timezone, locale_code)
+        weather_data = self.fetch_weather_data(timezone, locale_code, units, latitude, longitude)
         if not (weather_data and weather_data.get("current")):
             prev = self._load_cache(device_config)
             prev_weather = (prev or {}).get("weather") or {}
@@ -553,18 +559,42 @@ class SeniorDashboardAllDay(BasePlugin):
         """Get weather icon emoji for a given weather code."""
         return WEATHER_ICONS.get(code, "❓")
 
-    def fetch_weather_data(self, timezone, locale_code="en"):
-        """Fetch weather data from Open-Meteo API."""
+    def _get_weather_coords(self, settings):
+        """Return the (latitude, longitude) for the weather fetch from the settings the map picker
+        writes. Falls back to the default Darmstadt coordinates when unset or unparseable."""
+        lat, lon = DEFAULT_WEATHER_LAT, DEFAULT_WEATHER_LON
+        try:
+            if (settings.get("latitude") or "").strip() != "":
+                lat = float(settings["latitude"])
+            if (settings.get("longitude") or "").strip() != "":
+                lon = float(settings["longitude"])
+        except (TypeError, ValueError):
+            logger.warning("seniorDashboard: invalid weather coordinates in settings; using defaults")
+            return DEFAULT_WEATHER_LAT, DEFAULT_WEATHER_LON
+        return lat, lon
+
+    def fetch_weather_data(self, timezone, locale_code="en", units="metric",
+                           latitude=DEFAULT_WEATHER_LAT, longitude=DEFAULT_WEATHER_LON):
+        """Fetch weather data from Open-Meteo API.
+
+        `units` selects the temperature unit: "imperial" (°F) or "metric" (°C, default).
+        The API converts the values for us; we stamp the matching symbol into the returned
+        dict so cached renders never mismatch values and label.
+        `latitude`/`longitude` come from the settings map picker (default: Darmstadt).
+        """
         URL = "https://api.open-meteo.com/v1/dwd-icon"
         day_labels = LABELS.get(locale_code, LABELS["en"])
 
-        # Default coordinates (can be made configurable later)
+        # Open-Meteo temperature_unit param + display symbol, keyed by the settings value.
+        api_unit, unit_symbol = ("fahrenheit", "°F") if units == "imperial" else ("celsius", "°C")
+
         params = {
-            "latitude": 49.8728,
-            "longitude": 8.6512,
+            "latitude": latitude,
+            "longitude": longitude,
             "current_weather": True,
             "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode",
             "forecast_days": 3,
+            "temperature_unit": api_unit,
             "timezone": timezone
         }
 
@@ -599,7 +629,8 @@ class SeniorDashboardAllDay(BasePlugin):
 
             return {
                 "current": current_weather,
-                "forecast": forecast
+                "forecast": forecast,
+                "temperature_unit": unit_symbol
             }
         except Exception as e:
             logger.warning(f"Failed to fetch weather data: {str(e)}")

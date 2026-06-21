@@ -47,6 +47,16 @@
     </div>
 </div>
 
+<div class="form-group">
+    <div class="form-group nowrap">
+        <label for="temperatureUnit" class="form-label">Temperature Unit:</label>
+        <select id="temperatureUnit" name="temperatureUnit" class="form-input">
+            <option value="metric">Celsius (°C)</option>
+            <option value="imperial">Fahrenheit (°F)</option>
+        </select>
+    </div>
+</div>
+
 <div id="mapModal" class="modal">
     <div class="modal-content">
         <span class="close-button" onclick="closeModal('mapModal')">×</span>
@@ -91,12 +101,14 @@
         let language = "en";
         let calendars = [{ url: '' }];
         let fontSize = "normal";
+        let temperatureUnit = "metric";
         let latitude = "";
         let longitude = "";
 
         if (loadPluginSettings) {
             language = pluginSettings.language || "en";
             fontSize = pluginSettings.fontSize || "normal";
+            temperatureUnit = pluginSettings.temperatureUnit || "metric";
             latitude = pluginSettings.latitude != null && pluginSettings.latitude !== "" ? pluginSettings.latitude : "";
             longitude = pluginSettings.longitude != null && pluginSettings.longitude !== "" ? pluginSettings.longitude : "";
 
@@ -110,6 +122,7 @@
         // populate language dropdown
         document.getElementById('language').value = language;
         document.getElementById('fontSize').value = fontSize;
+        document.getElementById('temperatureUnit').value = temperatureUnit;
         document.getElementById('latitude').value = latitude;
         document.getElementById('longitude').value = longitude;
 

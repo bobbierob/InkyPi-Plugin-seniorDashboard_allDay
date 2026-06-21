@@ -28,7 +28,7 @@
                 <div class="weather-current">
                     <div class="weather-current-content">
                         <span class="weather-icon">{{ weather.current.icon }}</span>
-                        <span class="weather-temp">{{ weather.current.temperature|round|int }}°C</span>
+                        <span class="weather-temp">{{ weather.current.temperature|round|int }}{{ weather.temperature_unit or "°C" }}</span>
                     </div>
                 </div>
                 {% endif %}
@@ -41,7 +41,7 @@
                         <div class="weather-day-content">
                             <span class="weather-icon">{{ day.icon }}</span>
                             <span class="weather-temp-range">{{ day.temp_min|round|int }}–{{ day.temp_max|round|int
-                                }}°C</span>
+                                }}{{ weather.temperature_unit or "°C" }}</span>
                         </div>
                     </div>
                     {% endfor %}
