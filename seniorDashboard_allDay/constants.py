@@ -8,92 +8,29 @@ FONT_SIZES = {
     "x-large": 1.3
 }
 
-# Language options shown in the plugin settings dropdown.
-# The selected locale code is passed to FullCalendar and to Intl.DateTimeFormat for the
-# dashboard title and list-day headers, so dates (weekday, month, day, year) are already
-# fully localized by the browser when the correct locale code is used.
-LOCALE_MAP = {
-    "en": "English",
-    "de": "German",
-    "es": "Spanish",
-    "fr": "French",
-}
+# The plugin is English-only. LOCALE is passed to Intl.DateTimeFormat for the offline screen's date.
+LOCALE = "en"
 
-# UI strings for localization (keyed by locale code).
-# To add a new language:
-#   1. Add an entry to LOCALE_MAP above (e.g. "it": "Italian").
-#   2. Add a corresponding entry here with the same keys as "en", translated.
-# The calendar and date formatting use the same locale code, so weekday/month names and
-# date order will be correct for that language without further changes.
+# UI strings.
 LABELS = {
-    "en": {
-        "allDayText": "All day",
-        "noEventsContent": "Nothing scheduled!",
-        "nothingMoreToday": "Nothing more for today.",
-        "today": "Today",
-        "tomorrow": "Tomorrow",
-        "dayAfterTomorrow": "Day after tomorrow",
-        "offlineTitle": "No internet connection",
-        "offlineMessage": "The device will restart automatically at",
-        "offlineClock": "",
-        "offlineReassure": "Please wait a moment.",
-        "errorTitle": "Update failed",
-        "errorMessage": "There was a problem updating.",
-        "rebootPrefix": "Automatic restart at",
-        "configMessage": "No calendar configured.",
-        "noRebootNote": "Persistent problem - please ask for help.",
-    },
-    "de": {
-        "allDayText": "Ganztägig",
-        "noEventsContent": "Nix geplant!",
-        "nothingMoreToday": "Nix mehr los heute!",
-        "today": "Heute",
-        "tomorrow": "Morgen",
-        "dayAfterTomorrow": "Übermorgen",
-        "offlineTitle": "Keine Internetverbindung",
-        "offlineMessage": "Das Gerät startet automatisch neu um",
-        "offlineClock": "Uhr",
-        "offlineReassure": "Bitte einen Moment Geduld.",
-        "errorTitle": "Aktualisierung fehlgeschlagen",
-        "errorMessage": "Es gab ein Problem beim Aktualisieren.",
-        "rebootPrefix": "Automatischer Neustart um",
-        "configMessage": "Kein Kalender eingerichtet.",
-        "noRebootNote": "Anhaltendes Problem - bitte Hilfe holen.",
-    },
-    "es": {
-        "allDayText": "Todo el día",
-        "noEventsContent": "¡Nada programado!",
-        "nothingMoreToday": "Nada más para hoy.",
-        "today": "Hoy",
-        "tomorrow": "Mañana",
-        "dayAfterTomorrow": "Pasado mañana",
-        "offlineTitle": "Sin conexión a internet",
-        "offlineMessage": "El dispositivo se reiniciará automáticamente a las",
-        "offlineClock": "",
-        "offlineReassure": "Por favor, espere un momento.",
-        "errorTitle": "Error de actualización",
-        "errorMessage": "Hubo un problema al actualizar.",
-        "rebootPrefix": "Reinicio automático a las",
-        "configMessage": "Ningún calendario configurado.",
-        "noRebootNote": "Problema persistente: por favor pida ayuda.",
-    },
-    "fr": {
-        "allDayText": "Toute la journée",
-        "noEventsContent": "Rien de prévu !",
-        "nothingMoreToday": "Rien d'autre pour aujourd'hui.",
-        "today": "Aujourd'hui",
-        "tomorrow": "Demain",
-        "dayAfterTomorrow": "Après-demain",
-        "offlineTitle": "Pas de connexion internet",
-        "offlineMessage": "L'appareil redémarrera automatiquement à",
-        "offlineClock": "",
-        "offlineReassure": "Veuillez patienter un instant.",
-        "errorTitle": "Échec de la mise à jour",
-        "errorMessage": "Un problème est survenu lors de la mise à jour.",
-        "rebootPrefix": "Redémarrage automatique à",
-        "configMessage": "Aucun calendrier configuré.",
-        "noRebootNote": "Problème persistant - veuillez demander de l'aide.",
-    },
+    "allDayText": "All day",
+    "nothingMoreToday": "Nothing more for today.",
+    "today": "Today",
+    "tomorrow": "Tomorrow",
+    "offlineTitle": "No internet connection",
+    "offlineMessage": "The device will restart automatically at",
+    "offlineReassure": "Please wait a moment.",
+    "errorTitle": "Update failed",
+    "errorMessage": "There was a problem updating.",
+    "rebootPrefix": "Automatic restart at",
+    "configMessage": "No calendar configured.",
+    "noRebootNote": "Persistent problem - please ask for help.",
+    "noPrecipitation": "No precipitation",
+    "iceWarning": "Risk of ice",
+    "lastUpdated": "Last updated",
+    "moreEvents": "+{n} more",
+    "from": "from",
+    "until": "until",
 }
 
 WEATHER_ICONS = {
@@ -106,15 +43,22 @@ WEATHER_ICONS = {
     51: "🌦️",  # Niesel
     53: "🌦️",
     55: "🌦️",
+    56: "🧊",  # gefrierender Niesel
+    57: "🧊",
     61: "🌧️",  # Regen
     63: "🌧️",
     65: "🌧️",
+    66: "🧊",  # gefrierender Regen
+    67: "🧊",
     71: "❄️",  # Schnee
     73: "❄️",
     75: "❄️",
+    77: "🌨️",  # Schneegriesel
     80: "🌦️",  # Schauer
     81: "🌧️",
     82: "🌧️",
+    85: "🌨️",  # Schneeschauer
+    86: "🌨️",
     95: "⛈️",  # Gewitter
     96: "⛈️",
     99: "⛈️",

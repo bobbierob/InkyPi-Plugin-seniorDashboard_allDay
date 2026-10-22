@@ -1,5 +1,5 @@
 from plugins.base_plugin.base_plugin import BasePlugin
-from plugins.seniorDashboard_allDay.constants import LOCALE_MAP, LABELS, FONT_SIZES, WEATHER_ICONS
+from plugins.seniorDashboard_allDay.constants import LOCALE, LABELS, FONT_SIZES, WEATHER_ICONS
 from plugins.seniorDashboard_allDay import reboot_manager
 from plugins.seniorDashboard_allDay.reboot_manager import REBOOT_DELAY_SECONDS
 from utils.app_utils import get_font
@@ -8,7 +8,7 @@ import icalendar
 import recurring_ical_events
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import pytz
 
 logger = logging.getLogger(__name__)
@@ -26,12 +26,16 @@ STALE_COUNT_KEY = "seniorDashboard_allDay_stale_count"
 DEFAULT_WEATHER_LAT = 49.8728
 DEFAULT_WEATHER_LON = 8.6512
 
+# Rest-of-day rain view. Chance of rain is hourly; the timeline is drawn in half-hour cells.
+RAIN_CHANCE_WET = 50  # an hour at or above this chance is drawn as rain on the timeline
+RAIN_CHANCE_LOW = 20  # below this, with no expected amount, the rest of the day shows "No precipitation"
+FREEZING_CODES = {56, 57, 66, 67}  # WMO: freezing drizzle / freezing rain -> red on the timeline + ice warning
+
 
 class SeniorDashboardAllDay(BasePlugin):
     def generate_settings_template(self):
         template_params = super().generate_settings_template()
         template_params['style_settings'] = True
-        template_params['locale_map'] = LOCALE_MAP
         return template_params
 
     def generate_image(self, settings, device_config):
@@ -120,7 +124,6 @@ class SeniorDashboardAllDay(BasePlugin):
             calendar_colors = [default_color] * len(calendar_urls)
 
         timezone = device_config.get_config("timezone", default="America/New_York")
-        locale_code = settings.get("language") or "en"
         units = settings.get("temperatureUnit") or "metric"
         latitude, longitude = self._get_weather_coords(settings)
         tz = pytz.timezone(timezone)
@@ -136,7 +139,7 @@ class SeniorDashboardAllDay(BasePlugin):
         # The weather API hiccups independently of the calendar (e.g. a transient 502). When it does,
         # don't blank the weather / clobber the cache -- reuse the last-known-good cached weather so a
         # weather outage never wipes the weather block while the calendar is still updating fine.
-        weather_data = self.fetch_weather_data(timezone, locale_code, units, latitude, longitude)
+        weather_data = self.fetch_weather_data(timezone, units, latitude, longitude)
         if not (weather_data and weather_data.get("current")):
             prev = self._load_cache(device_config)
             prev_weather = (prev or {}).get("weather") or {}
@@ -155,12 +158,9 @@ class SeniorDashboardAllDay(BasePlugin):
     def _render_from_data(self, settings, device_config, data, indicator):
         """Build the dashboard image from a data dict ({events, weather}) -- fresh or cached.
 
-        Re-applies today-relative event filtering and today/tomorrow/day-after placeholder
-        injection against the *current* date, so cached events re-bucket correctly as days pass.
-        Raises on render failure.
+        Re-applies today-relative event filtering and day grouping against the *current* date, so
+        cached events re-bucket correctly as days pass. Raises on render failure.
         """
-        default_color = '#007BFF'
-        view = "listWeek"  # Fixed to list view (today + next 2 days)
         dimensions = device_config.get_resolution()
         if device_config.get_config("orientation") == "vertical":
             dimensions = dimensions[::-1]
@@ -171,34 +171,23 @@ class SeniorDashboardAllDay(BasePlugin):
         current_dt = datetime.now(tz)
 
         events = self._filter_active_events(data.get("events") or [], current_dt, tz)
-        weather_data = data.get("weather") or {"current": None, "forecast": []}
+        weather_data = data.get("weather") or {}
 
-        # Hardcode display options to True
-        display_settings = settings.copy()
-        display_settings["displayTitle"] = "true"
-        display_settings["displayWeekends"] = "true"
-        display_settings["displayEventTime"] = "true"
-
-        # Ensure language is set (default to 'en' if not provided)
-        if "language" not in display_settings or not display_settings["language"]:
-            display_settings["language"] = "en"
-
-        locale_code = display_settings.get("language", "en")
-        labels = LABELS.get(locale_code, LABELS["en"])
-
-        events = self._inject_placeholders(events, current_dt, tz, labels, default_color)
+        labels = LABELS
+        # The list covers the whole fetched window; the template drops the days that don't fit.
+        view_start, view_end = self.get_view_range(current_dt)
+        agenda = self._build_agenda(events, current_dt, tz, (view_end - view_start).days, time_format, labels)
 
         template_params = {
-            "view": view,
-            "events": events,
-            "current_dt": current_dt.replace(minute=0, second=0, microsecond=0).isoformat(),
-            "timezone": timezone,
-            "plugin_settings": display_settings,
-            "time_format": time_format,
+            "title": f"{current_dt:%A}, {current_dt:%B} {current_dt.day}, {current_dt.year}",
+            "agenda": agenda,
+            "plugin_settings": settings,
             "font_scale": FONT_SIZES.get(settings.get("fontSize", "normal")),
-            "locale_code": locale_code,
             "labels": labels,
             "weather": weather_data,
+            "wx": self._weather_view(weather_data, data.get("fetched_at"), current_dt, tz),
+            "rain": self._rain_view(weather_data, current_dt, time_format),
+            "last_updated": self._format_last_updated(data.get("fetched_at"), current_dt, tz, time_format),
             "indicator": indicator,
         }
 
@@ -208,38 +197,245 @@ class SeniorDashboardAllDay(BasePlugin):
             raise RuntimeError("Failed to take screenshot, please check logs.")
         return image
 
-    def _inject_placeholders(self, events, current_dt, tz, labels, default_color):
-        """Ensure the today/tomorrow/day-after sections are never dropped: add a placeholder event
-        for any of those days that currently has no event."""
-        contrast = self.get_contrast_color(default_color)
+    @staticmethod
+    def _weather_view(weather, fetched_at, now, tz):
+        """Today's and tomorrow's weather for the current date, from fresh or cached data.
 
-        # Today: a "nothing more for today" placeholder.
-        if not self._has_event_on_date(events, current_dt.date(), tz):
-            today_start = current_dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-            events = list(events) + [{
-                "title": labels["nothingMoreToday"],
-                "start": today_start,
-                "allDay": True,
-                "backgroundColor": default_color,
-                "textColor": contrast,
-                "classNames": ["senior-dashboard-nothing-more"],
-            }]
+        Returns {"current", "today", "tomorrow"}:
+          current:  the conditions at fetch time; only when the data was fetched today, since
+                    yesterday's "current" temperature would be wrong.
+          today:    today's daily forecast (icon, low/high), or None.
+          tomorrow: tomorrow's daily forecast, or None once the data is too old to have one.
+        A dashboard cached yesterday thus shows today's forecast instead of the current
+        temperature, and its Tomorrow is the real tomorrow, not the day already on screen.
+        """
+        daily = list(weather.get("daily") or [])
+        if not daily and weather.get("current"):
+            # Data cached before daily entries had dates: today's low/high sat on "current" and
+            # the one forecast entry was the day after. Date both from the fetch day.
+            fetch_day = (weather.get("today_hourly") or {}).get("date")
+            if not fetch_day and fetched_at:
+                try:
+                    fetch_day = datetime.fromisoformat(fetched_at).astimezone(tz).date().isoformat()
+                except (TypeError, ValueError):
+                    fetch_day = None
+            if fetch_day:
+                cur = weather["current"]
+                daily.append({"date": fetch_day, "icon": cur.get("icon"),
+                              "temp_min": cur.get("temp_min"), "temp_max": cur.get("temp_max")})
+                for i, day in enumerate(weather.get("forecast") or [], start=1):
+                    next_day = (date.fromisoformat(fetch_day) + timedelta(days=i)).isoformat()
+                    daily.append(dict(day, date=next_day))
 
-        # Tomorrow and the day after: a "nothing scheduled" placeholder.
-        for offset in (1, 2):
-            day = current_dt.date() + timedelta(days=offset)
-            if not self._has_event_on_date(events, day, tz):
-                day_start = (current_dt + timedelta(days=offset)).replace(
-                    hour=0, minute=0, second=0, microsecond=0).isoformat()
-                events = list(events) + [{
-                    "title": labels["noEventsContent"],
-                    "start": day_start,
-                    "allDay": True,
-                    "backgroundColor": default_color,
-                    "textColor": contrast,
-                    "classNames": ["senior-dashboard-nothing-more"],
-                }]
-        return events
+        by_date = {d.get("date"): d for d in daily}
+        today = now.date()
+        today_entry = by_date.get(today.isoformat())
+        if today_entry and not (isinstance(today_entry.get("temp_min"), (int, float))
+                                and isinstance(today_entry.get("temp_max"), (int, float))):
+            today_entry = None
+        fetched_today = bool(daily) and daily[0].get("date") == today.isoformat()
+        return {
+            "current": weather.get("current") if fetched_today else None,
+            "today": today_entry,
+            "tomorrow": by_date.get((today + timedelta(days=1)).isoformat()),
+        }
+
+    def _rain_view(self, weather, now, time_format):
+        """Precipitation outlook from the current half-hour to midnight, for the weather panel.
+
+        Computed at render time from the raw hourly data, so a dashboard re-rendered from cache
+        later in the day still starts its timeline at the current time.
+
+        Returns None when there is no hourly data for today (e.g. old cache, or cache from an
+        earlier day). Otherwise a dict:
+            state:    "wet" (something to draw on the timeline), "low", or "dry"
+            lines:    summary lines, e.g. ["💧 80% · 4.6 mm"], ["❄️ 70% · 5 cm"], or for rain and
+                      snow together ["🌨️ 60%", "💧 2 mm · ❄️ 3 cm"]
+            icy:      True when freezing rain/drizzle is forecast for the rest of today
+            segments: blocks as {"left", "width", "kind"} in % of the timeline (now -> midnight);
+                      kind is "rain" (chance >= RAIN_CHANCE_WET) or "ice" (freezing precipitation)
+            ticks:    time labels as {"left", "label"} in % of the timeline
+        """
+        hourly = (weather or {}).get("today_hourly") or {}
+        if hourly.get("date") != now.date().isoformat():
+            return None
+
+        def num(key, hour):
+            values = hourly.get(key) or []
+            v = values[hour] if hour < len(values) else None
+            return v if isinstance(v, (int, float)) else None
+
+        def total(key):
+            return sum(v for v in (num(key, h) for h in hours) if v is not None)
+
+        hours = range(now.hour, 24)
+        # The service sometimes returns no chance of rain (all null) while amounts and weather codes
+        # are fine. Then the view falls back on the expected amounts and leaves the % off.
+        chances = [c for c in (num("chance", h) for h in hours) if c is not None]
+        max_chance = round(max(chances)) if chances else None
+        if max_chance is None and all(num(k, h) is None for k in ("amount", "rain", "snow") for h in hours):
+            return None
+        imperial = (weather or {}).get("precipitation_unit") == "in"
+        min_liquid, min_snow = (0.005, 0.05) if imperial else (0.1, 0.1)
+
+        def likely(hour):
+            """Is precipitation likely in this hour? By chance when known, else by expected amount."""
+            chance = num("chance", hour)
+            if chance is not None:
+                return chance >= RAIN_CHANCE_WET
+            return (num("amount", hour) or 0) >= min_liquid
+
+        # Half-hour cells from the current half-hour to midnight, merged into same-kind blocks.
+        # Freezing precipitation is marked whatever its chance: it is the safety-relevant case.
+        start = (now.hour * 60 + now.minute) // 30 * 30  # minutes since midnight
+        windows = []
+        for slot in range(start, 24 * 60, 30):
+            hour = slot // 60
+            if num("code", hour) in FREEZING_CODES:
+                kind = "ice"
+            elif likely(hour):
+                kind = "rain"
+            else:
+                continue
+            if windows and windows[-1][1] == slot and windows[-1][2] == kind:
+                windows[-1][1] = slot + 30
+            else:
+                windows.append([slot, slot + 30, kind])
+        icy = any(kind == "ice" for _, _, kind in windows)
+
+        # Summary line. Rain is liquid (mm / in); snow is depth (cm / in), so 5 cm reads as snow
+        # rather than as "5 mm" of water. Data cached before the rain/snow split only has a total.
+        liquid_unit, snow_unit = ("in", "in") if imperial else ("mm", "cm")
+        has_split = "rain" in hourly and "snow" in hourly
+        liquid = total("rain") if has_split else total("amount")
+        snow = total("snow") if has_split else 0
+        pct_text = f"{max_chance}% · " if max_chance is not None else ""
+        both = (f"💧 {self._fmt_amount(liquid, imperial)} {liquid_unit}"
+                f" · ❄️ {self._fmt_amount(snow, imperial)} {snow_unit}")
+        if snow >= min_snow and liquid >= min_liquid:
+            # Too long for one line in the weather column: chance first, then both amounts.
+            lines = [f"🌨️ {max_chance}%", both] if max_chance is not None else [both]
+        elif snow >= min_snow:
+            lines = [f"❄️ {pct_text}{self._fmt_amount(snow, imperial)} {snow_unit}"]
+        else:
+            lines = [f"💧 {pct_text}{self._fmt_amount(liquid, imperial)} {liquid_unit}"]
+
+        if windows:
+            state = "wet"
+        elif (max_chance or 0) >= RAIN_CHANCE_LOW or liquid > 0 or snow > 0:
+            state = "low"
+        else:
+            state = "dry"
+
+        span = 24 * 60 - start
+
+        def pct(minutes):
+            return round((minutes - start) / span * 100, 2)
+
+        segments = [{"left": pct(a), "width": round((b - a) / span * 100, 2), "kind": kind}
+                    for a, b, kind in windows]
+
+        # Ticks every 3 hours (hourly when less than 6 hours remain), kept clear of the edges.
+        step = 180 if span > 360 else 60
+        ticks = []
+        for m in range((start // step + 1) * step, 24 * 60, step):
+            if 8 <= pct(m) <= 92:
+                ticks.append({"left": pct(m), "label": self._tick_label(m, time_format)})
+
+        return {"state": state, "lines": lines, "icy": icy, "segments": segments, "ticks": ticks}
+
+    @staticmethod
+    def _format_last_updated(fetched_at, now, tz, time_format):
+        """When the shown data was last fetched: "2:05pm" / "14:05" today, with the month/day
+        in front on an earlier day ("10/21 2:05pm"). None if unknown."""
+        try:
+            fetched = datetime.fromisoformat(fetched_at).astimezone(tz)
+        except (TypeError, ValueError):
+            return None
+        clock = SeniorDashboardAllDay._clock(fetched, time_format)
+        if fetched.date() == now.date():
+            return clock
+        return f"{fetched.month}/{fetched.day} {clock}"
+
+    @staticmethod
+    def _clock(dt, time_format):
+        """A time of day as the dashboard writes it: "2:05pm", or "14:05" for the 24h setting."""
+        if time_format == "24h":
+            return dt.strftime("%H:%M")
+        return f"{(dt.hour + 11) % 12 + 1}:{dt.minute:02d}{'am' if dt.hour < 12 else 'pm'}"
+
+    @staticmethod
+    def _fmt_amount(value, imperial):
+        """1 decimal for mm/cm, 2 for inches, no trailing zeros: 4.6, 0, 12.3, 0.18."""
+        return f"{round(value, 2 if imperial else 1):g}"
+
+    @staticmethod
+    def _tick_label(minutes, time_format):
+        hour = minutes // 60
+        if time_format == "24h":
+            return f"{hour:02d}:00"
+        return f"{(hour + 11) % 12 + 1}{'am' if hour < 12 else 'pm'}"
+
+    def _build_agenda(self, events, current_dt, tz, days, time_format, labels):
+        """Group events into the days they fall on, for the calendar list.
+
+        Returns today (always, with a placeholder when nothing is left today) and each later day
+        in the window that has events:
+            [{"is_today", "weekday" ("Fri"), "month_day" ("Oct 23"), "entries": [{"time", "title"}]}]
+        Multi-day events appear on every day they cover: all-day events as "All day"; timed ones
+        as "from 11pm" on the first day, "All day" in between and "until 1am" on the last.
+        Within a day, all-day items come first, then by start time.
+        """
+        today = current_dt.date()
+        by_day = {today + timedelta(days=i): [] for i in range(days)}
+        for ev in events:
+            try:
+                start, end, last_date = self._event_span(ev, tz)
+            except (ValueError, TypeError, AttributeError, KeyError):
+                continue
+            all_day = ev.get("allDay", False)
+            title = ev.get("title") or ""
+            day = max(start.date(), today)
+            while day <= last_date and day in by_day:
+                first, last = day == start.date(), day == last_date
+                if all_day or (not first and not last):
+                    time, sort_key = labels["allDayText"], (0, 0)
+                elif first and (last or end is None):
+                    time = self._event_clock(start, time_format)
+                    if end is not None:
+                        time += " - " + self._event_clock(end, time_format)
+                    sort_key = (1, start.hour * 60 + start.minute)
+                elif first:
+                    time, sort_key = f"{labels['from']} {self._event_clock(start, time_format)}", (1, start.hour * 60 + start.minute)
+                else:
+                    time, sort_key = f"{labels['until']} {self._event_clock(end, time_format)}", (1, 0)
+                by_day[day].append((sort_key, title, time))
+                day += timedelta(days=1)
+
+        agenda = []
+        for day, items in by_day.items():
+            if not items and day != today:
+                continue
+            items.sort(key=lambda item: (item[0], item[1].lower()))
+            entries = [{"time": time, "title": title} for _, title, time in items]
+            if not entries:
+                entries = [{"time": "", "title": labels["nothingMoreToday"], "placeholder": True}]
+            agenda.append({
+                "is_today": day == today,
+                "weekday": f"{day:%a}",
+                "month_day": f"{day:%b} {day.day}",
+                "entries": entries,
+            })
+        return agenda
+
+    @staticmethod
+    def _event_clock(dt, time_format):
+        """An event time as the calendar writes it: "2:30pm", "9am" (no ":00"), or "14:30"."""
+        if time_format == "24h":
+            return dt.strftime("%H:%M")
+        hour = (dt.hour + 11) % 12 + 1
+        minutes = f":{dt.minute:02d}" if dt.minute else ""
+        return f"{hour}{minutes}{'am' if dt.hour < 12 else 'pm'}"
 
     def fetch_ics_events(self, calendar_urls, colors, tz, start_range, end_range, current_dt):
         """Fetch and parse all events in the [start_range, end_range] window (no date filtering).
@@ -273,47 +469,36 @@ class SeniorDashboardAllDay(BasePlugin):
         return parsed_events
 
     def _filter_active_events(self, events, current_dt, tz):
-        """Drop events that have fully ended relative to current_dt (start of today). Keeps events
-        whose date can't be parsed rather than hiding potentially valid data."""
-        current_day_start = current_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        """Drop events that have fully ended relative to current_dt. Keeps events whose date can't
+        be parsed rather than hiding potentially valid data."""
         active = []
         for ev in events:
-            start = ev.get("start")
-            end = ev.get("end")
-            all_day = ev.get("allDay", False)
             try:
-                end_iso = end or start
-                end_dt = datetime.fromisoformat(end_iso)
-                if end_dt.tzinfo is None:
-                    end_dt = tz.localize(end_dt)
+                start, end, last_date = self._event_span(ev, tz)
                 # Ended before today.
-                if end_dt.date() < current_day_start.date():
+                if last_date < current_dt.date():
                     continue
-                # Today's timed event that has already ended.
-                if end_dt.date() == current_dt.date() and not all_day and end_dt <= current_dt:
+                # Timed event that has already ended.
+                if not ev.get("allDay", False) and (end or start) <= current_dt:
                     continue
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 pass  # keep on parse failure
             active.append(ev)
         return active
 
-    def _has_event_on_date(self, events, target_date, tz):
-        """Return True if any event starts on target_date (timezone-aware comparison)."""
-        for ev in events:
-            start_str = ev.get("start")
-            if not start_str:
-                continue
-            try:
-                dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = tz.localize(dt)
-                else:
-                    dt = dt.astimezone(tz)
-                if dt.date() == target_date:
-                    return True
-            except (ValueError, TypeError):
-                continue
-        return False
+    @staticmethod
+    def _event_span(ev, tz):
+        """(start, end or None, last day the event is on) as timezone-aware values. End times are
+        exclusive, as in iCal: an all-day event ending on the 24th is over by the 24th, and so is a
+        timed event ending at midnight. Raises on unparseable dates."""
+        def parse(value):
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return tz.localize(dt) if dt.tzinfo is None else dt.astimezone(tz)
+
+        start = parse(ev["start"])
+        end = parse(ev["end"]) if ev.get("end") else None
+        last_date = (end - timedelta(microseconds=1)).date() if end and end > start else start.date()
+        return start, end, last_date
 
     def get_view_range(self, current_dt):
         """Get the date range for this week and next week (2 weeks total)."""
@@ -414,15 +599,10 @@ class SeniorDashboardAllDay(BasePlugin):
     # ----- No-data status screen (used only when there is no cached dashboard to show) -----
 
     def _format_reboot_time(self, device_config, reboot_at, labels):
-        """Format a reboot time as e.g. '13:40 Uhr' / '1:40 PM', honoring 12h/24h + locale clock suffix."""
+        """Format a reboot time the way the dashboard writes times ("1:40pm" / "13:40")."""
         timezone = device_config.get_config("timezone", default="America/New_York")
         time_format = device_config.get_config("time_format", default="12h")
-        local = reboot_at.astimezone(pytz.timezone(timezone))
-        if time_format == "12h":
-            s = local.strftime("%I:%M %p").lstrip("0")
-        else:
-            s = local.strftime("%H:%M")
-        return f"{s} {labels.get('offlineClock', '')}".strip()
+        return self._clock(reboot_at.astimezone(pytz.timezone(timezone)), time_format)
 
     def _handle_failure(self, device_config, settings, reason, urls):
         """Render a localized no-data status screen (never raises). Used only when there is no cached
@@ -431,8 +611,7 @@ class SeniorDashboardAllDay(BasePlugin):
         offline bootstrap case is handled by the caller; here we only display any pending reboot time.
         """
         try:
-            locale_code = settings.get("language") or "en"
-            labels = LABELS.get(locale_code, LABELS["en"])
+            labels = LABELS
 
             # Config errors are not recoverable by a reboot.
             if reason == "config":
@@ -478,7 +657,7 @@ class SeniorDashboardAllDay(BasePlugin):
         if device_config.get_config("orientation") == "vertical":
             dimensions = dimensions[::-1]
         timezone = device_config.get_config("timezone", default="America/New_York")
-        locale_code = settings.get("language") or "en"
+        locale_code = LOCALE
         tz = pytz.timezone(timezone)
 
         template_params = {
@@ -573,28 +752,35 @@ class SeniorDashboardAllDay(BasePlugin):
             return DEFAULT_WEATHER_LAT, DEFAULT_WEATHER_LON
         return lat, lon
 
-    def fetch_weather_data(self, timezone, locale_code="en", units="metric",
+    def fetch_weather_data(self, timezone, units="metric",
                            latitude=DEFAULT_WEATHER_LAT, longitude=DEFAULT_WEATHER_LON):
-        """Fetch weather data from Open-Meteo API.
+        """Fetch weather data from the Open-Meteo API.
 
         `units` selects the temperature unit: "imperial" (°F) or "metric" (°C, default).
         The API converts the values for us; we stamp the matching symbol into the returned
         dict so cached renders never mismatch values and label.
         `latitude`/`longitude` come from the settings map picker (default: Darmstadt).
         """
-        URL = "https://api.open-meteo.com/v1/dwd-icon"
-        day_labels = LABELS.get(locale_code, LABELS["en"])
+        # Open-Meteo's default forecast: it picks the best weather models for the location
+        # (for Toronto: Canada's 2.5 km HRDPS, the hourly US HRRR, and global models further out).
+        URL = "https://api.open-meteo.com/v1/forecast"
 
-        # Open-Meteo temperature_unit param + display symbol, keyed by the settings value.
-        api_unit, unit_symbol = ("fahrenheit", "°F") if units == "imperial" else ("celsius", "°C")
+        # Open-Meteo temperature/precipitation unit params + display symbols, keyed by the settings value.
+        if units == "imperial":
+            api_unit, unit_symbol, precip_api_unit, precip_symbol = "fahrenheit", "°F", "inch", "in"
+        else:
+            api_unit, unit_symbol, precip_api_unit, precip_symbol = "celsius", "°C", "mm", "mm"
 
         params = {
             "latitude": latitude,
             "longitude": longitude,
             "current_weather": True,
             "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode",
+            "hourly": "precipitation,precipitation_probability,rain,showers,snowfall,weather_code",
+            # Today, tomorrow and the day after, so a cache saved yesterday still has a tomorrow.
             "forecast_days": 3,
             "temperature_unit": api_unit,
+            "precipitation_unit": precip_api_unit,
             "timezone": timezone
         }
 
@@ -603,34 +789,60 @@ class SeniorDashboardAllDay(BasePlugin):
             response.raise_for_status()
             data = response.json()
 
-            # Process current weather
+            # Daily arrays start at *today*: index 0 = today, index 1 = tomorrow, ...
+            daily = data.get("daily", {})
+
+            def daily_value(key, i, default=0):
+                values = daily.get(key) or []
+                return values[i] if i < len(values) else default
+
+            # Current weather, as of the fetch.
             current = data.get("current_weather", {})
             current_weather = {
                 "icon": self.get_weather_icon(current.get("weathercode", 0)),
                 "temperature": current.get("temperature", 0),
                 "windspeed": current.get("windspeed", 0),
-                "weathercode": current.get("weathercode", 0)
+                "weathercode": current.get("weathercode", 0),
             }
 
-            # Process daily forecast (first 2 days: tomorrow and day after)
-            daily = data.get("daily", {})
-            forecast = []
-            if "time" in daily:
-                for i, day in enumerate(daily["time"][:2]):
-                    date_label = day_labels["tomorrow"] if i == 0 else day_labels["dayAfterTomorrow"]
-                    forecast.append({
-                        "date": date_label,
-                        "icon": self.get_weather_icon(daily.get("weathercode", [0])[i] if i < len(daily.get("weathercode", [])) else 0),
-                        "temp_min": daily.get("temperature_2m_min", [0])[i] if i < len(daily.get("temperature_2m_min", [])) else 0,
-                        "temp_max": daily.get("temperature_2m_max", [0])[i] if i < len(daily.get("temperature_2m_max", [])) else 0,
-                        "precipitation": daily.get("precipitation_sum", [0])[i] if i < len(daily.get("precipitation_sum", [])) else 0,
-                        "weathercode": daily.get("weathercode", [0])[i] if i < len(daily.get("weathercode", [])) else 0
-                    })
+            # Today's hourly precipitation, indexed by local hour 0-23 (times are in `timezone`).
+            # Kept raw so the rest-of-day view can be recomputed at render time, also from cache.
+            #   chance: % chance of any precipitation      amount: total, as liquid (mm / in)
+            #   rain:   rain + showers, liquid (mm / in)   snow:   snowfall depth (cm / in)
+            #   code:   WMO weather code (used to spot freezing rain / drizzle)
+            hourly = data.get("hourly", {})
+            today_str = (daily.get("time") or [None])[0]
+            fields = {"chance": "precipitation_probability", "amount": "precipitation",
+                      "rain": "rain", "showers": "showers", "snow": "snowfall", "code": "weather_code"}
+            series = {key: [None] * 24 for key in fields}
+            for i, t in enumerate(hourly.get("time") or []):
+                if today_str and t.startswith(today_str):
+                    hour = int(t[11:13])
+                    for key, api_name in fields.items():
+                        values = hourly.get(api_name) or []
+                        series[key][hour] = values[i] if i < len(values) else None
+            # Showers are rain too; fold them in so "rain" is all liquid precipitation.
+            series["rain"] = [None if r is None and s is None else (r or 0) + (s or 0)
+                              for r, s in zip(series["rain"], series.pop("showers"))]
+            today_hourly = {"date": today_str, **series}
+
+            # Daily forecast by date ("YYYY-MM-DD"). The render picks today's low/high and
+            # tomorrow's forecast by date, so cached data stays right as the days pass.
+            forecast_days = [{
+                "date": day,
+                "icon": self.get_weather_icon(daily_value("weathercode", i)),
+                "temp_min": daily_value("temperature_2m_min", i, None),
+                "temp_max": daily_value("temperature_2m_max", i, None),
+                "precipitation": daily_value("precipitation_sum", i),
+                "weathercode": daily_value("weathercode", i),
+            } for i, day in enumerate(daily.get("time") or [])]
 
             return {
                 "current": current_weather,
-                "forecast": forecast,
-                "temperature_unit": unit_symbol
+                "daily": forecast_days,
+                "temperature_unit": unit_symbol,
+                "precipitation_unit": precip_symbol,
+                "today_hourly": today_hourly
             }
         except Exception as e:
             logger.warning(f"Failed to fetch weather data: {str(e)}")

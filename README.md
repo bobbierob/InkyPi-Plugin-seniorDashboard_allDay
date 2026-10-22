@@ -5,24 +5,22 @@
 
 **What it does:**
 
-- **Calendar** — Displays today and the next two of days in a list. Events that have already ended are hidden. 
-- **Weather** — Shows current conditions and a short forecast (e.g. tomorrow and the day after) in a minimal layout: icon and temperature, with high/low for the next days. Temperatures can be shown in **°C or °F** (selectable in the settings) and are fetched for the **location you set** on the map.
-It uses the DWD (Deutscher Wetter Dienst) free API, so no API-key config needed.
+- **Calendar** — Lists the coming days with events, as many as fit on the screen, each with a short date ("Fri / Oct 23") in a narrow column; today is always listed (with "Nothing more for today." when it's empty) and marked with a green bar. Today gets all the room it needs on a busy day; later days are trimmed first. A trimmed day ends with "+N more" on its last event, and long titles are cut off with "…". Multi-day events show on every day they cover. Events that have already ended are hidden.
+- **Weather** — Shows current conditions with today's low–high, the chance and amount of rain or snow for the rest of the day on a small timeline (with an ice warning for freezing rain), and tomorrow's forecast, in a minimal layout. Temperatures can be shown in **°C or °F** (selectable in the settings) and are fetched for the **location you set** on the map.
+It uses the free [Open-Meteo](https://open-meteo.com) forecast, which picks the best weather models for your location, so no API key is needed.
 - **Always shows real data, even offline** — When the internet connection drops, the plugin keeps showing a normal dashboard built from the **last successfully fetched data** (correct current date, your appointments, last weather) instead of an error screen, and quietly reboots to try to restore the connection. A small corner indicator tells you at a glance whether the data is live. See [Offline behaviour & auto-recovery](#offline-behaviour--auto-recovery) below.
 
 The layout is kept clear and low-clutter so it works well on an e-ink display and for quick, easy reading.
 
 It is optimized for and tested only on landscape waveshare 7.2 inch display but should render ok on every comparable landscape display.
 
-It's basically a mix of the calendar list view and weather template.
 No additional dependencies whatsoever.
 
 **Settings:**
 ![Screenshot of settings of InkyPi-Plugin-seniorDashboard_allDay](./settings.png)
-Language can be set to **English**, **French** , **Spanish**  or **German**. 
-Other languages can easily be added in *constants.py*, just make sure to use the correct international language ID so the calendar returns correct dates/formats.
-You can add multiple calendars, they will all be used to compile the today, tomorrow and day after tomorrow list.
-Location setting for the weather, picked on a map (DWD supplies world wide weather info); the weather is fetched for exactly that spot.
+The dashboard is in English.
+You can add multiple calendars; their events are merged into one list.
+Location setting for the weather, picked on a map (Open-Meteo covers the whole world); the weather is fetched for exactly that spot.
 Temperature unit can be set to **Celsius (°C)** or **Fahrenheit (°F)**; the conversion is done by the weather API so the values are always correct.
 Font size for the Calendar listing.
 
@@ -57,7 +55,7 @@ The result: there is **always a current date and your appointments on screen**, 
 - **Renderer safety net:** the fallback status screen normally renders via the same HTML engine as the dashboard; if that itself fails, the plugin falls back to a plain built-in screen so it still shows the date.
 - The reboot uses the same `sudo reboot` mechanism as InkyPi's built-in Reboot button, so it relies on the passwordless-sudo setup a standard InkyPi installation already configures. No extra setup is required.
 - The stored data and the offline counter live in the device config, so they survive the reboot — the count keeps climbing across an outage rather than resetting each cycle.
-- The fallback screens are localized in the same languages as the rest of the plugin (English, German, Spanish, French) and follow the device's 12h/24h time format.
+- The fallback screens follow the device's 12h/24h time format.
 
 
 ## Installation

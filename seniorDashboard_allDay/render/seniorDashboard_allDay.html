@@ -2,196 +2,189 @@
 
 {% block content %}
 
-<script src="{{static_dir}}/scripts/calendar.min.js" charset="UTF-8"></script>
+{# Temperatures: a true minus sign (−5, not -5). Ranges that include a negative say "to"
+   ("−26 to −21°C"); a dash between minus signs reads as a row of dashes. #}
+{% macro deg(v) %}{{ (v|round|int)|string|replace("-", "−") }}{% endmacro %}
+{% macro temp_range(lo, hi) %}{{ deg(lo) }}{% if lo|round|int < 0 or hi|round|int < 0 %} to {% else %}–{% endif %}{{ deg(hi) }}{% endmacro %}
 
 <div class="dashboard-wrapper">
-    <div class="dashboard-title" id="dashboard-title"></div>
+    <div class="dashboard-title">{{ title }}</div>
 
     <div class="dashboard-container">
         <div class="dashboard-left">
-            <div id="calendar" class="calendar" style="
-        --fc-page-bg-color: {{ plugin_settings.backgroundColor or white }};
-        --fc-border-color: {{ plugin_settings.textColor }};
-        --fc-today-bg-color: '';
-        --fc-event-border-color: {{ plugin_settings.textColor or white }};
-
-        --fc-small-font-size: {{ 0.85 * font_scale }}em;
-        --fc-title-font-size: {{ 1.75 * font_scale }}em;
-        --fc-table-font-size: {{ 1 * font_scale }}em;
-        ">
-
+            {# The day list (see _build_agenda): a date column, then each event's time and title.
+               Every day with events in the fetched window is drawn; fitToScreen below hides what
+               doesn't fit. #}
+            <div id="calendar" class="calendar" style="--fc-table-font-size: {{ 1 * font_scale }}em;">
+                <table class="agenda">
+                    {% for day in agenda %}
+                    {% set day_index = loop.index0 %}
+                    {% for item in day.entries %}
+                    <tr class="agenda-row{% if loop.first %} day-start{% endif %}{% if item.placeholder %} placeholder{% endif %}" data-day="{{ day_index }}">
+                        {% if loop.first %}
+                        <td class="agenda-date{% if day.is_today %} is-today{% endif %}" rowspan="{{ day.entries|length }}">
+                            {% if day.is_today %}
+                            <span class="agenda-weekday">{{ labels.today }}</span>
+                            {% else %}
+                            <span class="agenda-weekday">{{ day.weekday }}</span>
+                            <span class="agenda-month-day">{{ day.month_day }}</span>
+                            {% endif %}
+                        </td>
+                        {% endif %}
+                        <td class="agenda-time">{{ item.time }}</td>
+                        <td class="agenda-what">
+                            <div class="agenda-line"><span class="agenda-title">{{ item.title }}</span><span class="agenda-more"></span></div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% endfor %}
+                </table>
             </div>
         </div>
         <div class="dashboard-right">
             <div class="weather-container">
-                {% if weather and weather.current %}
+                {# wx (see _weather_view) is dated against today: "current" only when the data was
+                   fetched today; otherwise today's forecast stands in, labelled "Today". #}
+                {% set unit = weather.temperature_unit or "°C" %}
+                {% if wx.current or wx.today %}
                 <div class="weather-current">
                     <div class="weather-current-content">
-                        <span class="weather-icon">{{ weather.current.icon }}</span>
-                        <span class="weather-temp">{{ weather.current.temperature|round|int }}{{ weather.temperature_unit or "°C" }}</span>
+                        <span class="weather-icon">{{ wx.current.icon if wx.current else wx.today.icon }}</span>
+                        <div class="weather-current-temps">
+                            {% if wx.current %}
+                            <span class="weather-temp">{{ deg(wx.current.temperature) }}{{ unit }}</span>
+                            {% else %}
+                            <span class="weather-temp">{{ labels.today }}</span>
+                            {% endif %}
+                            {% if wx.today %}
+                            <span class="weather-current-range weather-temp-range">{{ temp_range(wx.today.temp_min, wx.today.temp_max) }}{{ unit }}</span>
+                            {% endif %}
+                        </div>
                     </div>
+                    {# Rain for the rest of today (see _rain_view). None for old or out-of-date cached data. #}
+                    {% if rain %}
+                    {% if rain.state == "dry" %}
+                    <div class="weather-current-precip">☀️ {{ labels.noPrecipitation }}</div>
+                    {% else %}
+                    {% for line in rain.lines %}
+                    <div class="weather-current-precip{% if not loop.first %} weather-current-precip-more{% endif %}">{{ line }}</div>
+                    {% endfor %}
+                    {% if rain.icy %}
+                    <div class="weather-ice-warning">⚠️ {{ labels.iceWarning }}</div>
+                    {% endif %}
+                    {% if rain.segments %}
+                    <div class="rain-timeline">
+                        <div class="rain-strip">
+                            {%- for s in rain.segments %}<span class="rain-segment rain-segment-{{ s.kind }}" style="left: {{ s.left }}%; width: {{ s.width }}%"></span>{% endfor -%}
+                        </div>
+                        <div class="rain-ticks">
+                            {%- for t in rain.ticks %}<span class="rain-tick" style="left: {{ t.left }}%">{{ t.label }}</span>{% endfor -%}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% endif %}
+                    {% endif %}
                 </div>
                 {% endif %}
 
-                {% if weather and weather.forecast %}
+                {% if wx.tomorrow and wx.tomorrow.temp_min is number and wx.tomorrow.temp_max is number %}
                 <div class="weather-forecast">
-                    {% for day in weather.forecast %}
                     <div class="weather-day">
-                        <div class="weather-day-date">{{ day.date }}</div>
+                        <div class="weather-day-date">{{ labels.tomorrow }}</div>
                         <div class="weather-day-content">
-                            <span class="weather-icon">{{ day.icon }}</span>
-                            <span class="weather-temp-range">{{ day.temp_min|round|int }}–{{ day.temp_max|round|int
-                                }}{{ weather.temperature_unit or "°C" }}</span>
+                            <span class="weather-icon">{{ wx.tomorrow.icon }}</span>
+                            <span class="weather-temp-range">{{ temp_range(wx.tomorrow.temp_min, wx.tomorrow.temp_max) }}{{ unit }}</span>
                         </div>
                     </div>
-                    {% endfor %}
                 </div>
                 {% endif %}
             </div>
         </div>
     </div>
 
-    {% if indicator %}
-    {% if indicator.mode == "ok" %}
-    <div class="refresh-indicator refresh-indicator-ok" title="Last refresh fetched fresh data"></div>
-    {% elif indicator.mode == "stale" and indicator.count %}
-    <div class="refresh-indicator refresh-indicator-stale" title="Refreshes showing stored data since last connection">{{ indicator.count }}</div>
-    {% endif %}
-    {% endif %}
+    {# Bottom-right footer: when the shown data was fetched, then the live/stale indicator. #}
+    <div class="refresh-footer">
+        {% if last_updated %}
+        <span class="last-updated">{{ labels.lastUpdated }} {{ last_updated }}</span>
+        {% endif %}
+        {% if indicator %}
+        {% if indicator.mode == "ok" %}
+        <div class="refresh-indicator refresh-indicator-ok" title="Last refresh fetched fresh data"></div>
+        {% elif indicator.mode == "stale" and indicator.count %}
+        <div class="refresh-indicator refresh-indicator-stale" title="Refreshes showing stored data since last connection">{{ indicator.count }}</div>
+        {% endif %}
+        {% endif %}
+    </div>
 </div>
 
-<script type="application/json" id="senior-dashboard-config">
-{{ {
-    "events": events,
-    "time_format_12h": time_format == "12h",
-    "locale": plugin_settings.language or "en",
-    "timezone": timezone,
-    "current_dt": current_dt,
-    "labels": labels
-} | tojson }}
-</script>
+<script type="application/json" id="senior-dashboard-labels">{{ {"moreEvents": labels.moreEvents} | tojson }}</script>
 <script>
     (function () {
-        const configEl = document.getElementById('senior-dashboard-config');
-        const config = configEl ? JSON.parse(configEl.textContent) : {};
-        const calendarEvents = config.events || [];
-        const locale = config.locale || 'en';
-        const timezone = config.timezone || 'UTC';
-        const currentDt = config.current_dt || '';
-        const timeFormat12h = config.time_format_12h !== false;
-        const labels = config.labels || {
-            allDayText: 'All day',
-            noEventsContent: 'Nothing scheduled!',
-            today: 'Today',
-            tomorrow: 'Tomorrow',
-            dayAfterTomorrow: 'Day after tomorrow'
-        };
+        const labels = JSON.parse(document.getElementById('senior-dashboard-labels').textContent);
 
-        document.addEventListener('DOMContentLoaded', function () {
-            const calendarEl = document.getElementById('calendar');
-            const timeFormat = {
-                hour: "numeric",
-                minute: "2-digit",
-                omitZeroMinute: timeFormat12h,
-                hour12: timeFormat12h,
-                meridiem: 'short'
-            };
+        // Fit the day list to the screen, hiding rows from the end so earlier days keep priority:
+        //   1. later days (4th listed day on) lose events from the end, then go entirely;
+        //   2. the 2nd and 3rd listed days give up events evenly (the one with more first, the
+        //      later one on a tie), down to one each;
+        //   3. then they go too, the 3rd before the 2nd;
+        //   4. today, which may take the whole list, loses events from the end as a last resort.
+        // A trimmed day ends with "+N more" on its last shown event, so each hidden event saves a
+        // whole row. Titles never wrap (they are cut off with "…"), so every row is one line.
+        function fitToScreen() {
+            const box = document.getElementById('calendar');
+            const table = box && box.querySelector('.agenda');
+            if (!table) return;
 
-            const currentDate = new Date(currentDt);
-            const dateFormatter = new Intl.DateTimeFormat(locale, {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                timeZone: timezone
+            const groups = [];
+            table.querySelectorAll('.agenda-row').forEach(function (row) {
+                const i = Number(row.dataset.day);
+                if (!groups[i]) groups[i] = { rows: [], date: row.querySelector('.agenda-date') };
+                groups[i].rows.push(row);
             });
-            const formattedTitle = dateFormatter.format(currentDate);
+            groups.forEach(function (g) { g.shown = g.rows.length; g.visible = true; });
 
-            // Calculate the 3-day range for display
-            const startDate = new Date(currentDt);
-            const endDate = new Date(currentDt);
-            endDate.setDate(endDate.getDate() + 3);
-
-            console.log('Current date:', currentDt);
-            console.log('Total events from backend:', calendarEvents.length);
-            console.log('Events:', calendarEvents);
-
-            const calendar = new FullCalendar.Calendar(calendarEl, {
-                initialView: 'list',
-                views: {
-                    list: {
-                        duration: { days: 3 }
-                    }
-                },
-                events: calendarEvents,
-                now: currentDt,
-                initialDate: currentDt,
-                validRange: {
-                    start: startDate,
-                    end: endDate
-                },
-                timeZone: timezone,
-                contentHeight: '100%',
-                expandRows: true,
-                locale: locale,
-                allDayText: labels.allDayText,
-                noEventsContent: labels.noEventsContent,
-                eventTimeFormat: timeFormat,
-                displayEventTime: true,
-                weekends: true,
-                fixedWeekCount: false,
-                headerToolbar: {
-                    left: '',
-                    center: '',
-                    right: ''
-                },
-                eventDidMount: function (arg) {
-                    if (arg.el.classList.contains('senior-dashboard-nothing-more')) {
-                        const timeEl = arg.el.querySelector('.fc-list-event-time');
-                        const titleEl = arg.el.querySelector('.fc-list-event-title');
-                        if (timeEl) {
-                            timeEl.style.visibility = 'hidden';
-                        }
-                        if (titleEl) {
-                            titleEl.textContent = arg.event.title || '';
-                        }
-                    }
-                },
-                datesSet: function () {
-                    const dashboardTitleEl = document.getElementById('dashboard-title');
-                    if (dashboardTitleEl) {
-                        dashboardTitleEl.textContent = formattedTitle;
-                    }
-                    // Set list day headers to "Heute: Sonntag 1. Februar 2026" (same format as title: weekday, month, day, year)
-                    const dayLabels = [labels.today, labels.tomorrow, labels.dayAfterTomorrow];
-                    const dayDates = [
-                        currentDate,
-                        (function () { const d = new Date(currentDt); d.setDate(d.getDate() + 1); return d; })(),
-                        (function () { const d = new Date(currentDt); d.setDate(d.getDate() + 2); return d; })()
-                    ];
-                    requestAnimationFrame(function () {
-                        const listDays = calendarEl.querySelectorAll('.fc-list-day');
-                        listDays.forEach(function (dayEl, i) {
-                            const label = dayLabels[i];
-                            const dayDate = dayDates[i];
-                            if (!label || !dayDate) return;
-                            const formatted = dateFormatter.format(dayDate);
-                            const text = label + ': ' + formatted;
-                            const textEl = dayEl.querySelector('.fc-list-day-text') || dayEl.querySelector('.fc-list-day-cushion');
-                            const sideEl = dayEl.querySelector('.fc-list-day-side-text');
-                            if (textEl) textEl.textContent = text;
-                            if (sideEl) sideEl.textContent = text;
-                        });
-                    });
-                }
-            });
-            calendar.render();
-
-            const dashboardTitleEl = document.getElementById('dashboard-title');
-            if (dashboardTitleEl) {
-                dashboardTitleEl.textContent = formattedTitle;
+            function apply(g) {
+                g.rows.forEach(function (row, i) {
+                    row.style.display = g.visible && i < g.shown ? '' : 'none';
+                    const more = row.querySelector('.agenda-more');
+                    const hidden = g.rows.length - g.shown;
+                    more.textContent = g.visible && i === g.shown - 1 && hidden > 0
+                        ? labels.moreEvents.replace('{n}', hidden) : '';
+                });
+                if (g.date) g.date.rowSpan = Math.max(g.shown, 1);
             }
-        });
+            groups.forEach(apply);
+
+            function overflows() { return table.offsetHeight > box.clientHeight; }
+            function shrink(g) {
+                if (g.shown <= 1) return false;
+                g.shown -= 1;
+                apply(g);
+                return true;
+            }
+            function hide(g) { g.visible = false; apply(g); }
+
+            while (overflows()) {
+                const visible = groups.filter(function (g) { return g.visible; });
+                const later = visible.slice(3);
+                if (later.length) {
+                    const last = later[later.length - 1];
+                    if (!shrink(last)) hide(last);
+                    continue;
+                }
+                const next = visible.slice(1, 3);
+                const candidates = next.filter(function (g) { return g.shown > 1; })
+                    .sort(function (a, b) { return b.shown - a.shown || groups.indexOf(b) - groups.indexOf(a); });
+                if (candidates.length) { shrink(candidates[0]); continue; }
+                if (next.length) { hide(next[next.length - 1]); continue; }
+                if (!shrink(visible[0])) break;  // Today is down to one event; nothing more to give.
+            }
+        }
+
+        // Fit once the web fonts are in, since they set text widths; again on load to be safe.
+        fitToScreen();
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitToScreen);
+        window.addEventListener('load', fitToScreen);
     })();
 </script>
 

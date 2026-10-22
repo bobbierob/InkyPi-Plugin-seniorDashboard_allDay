@@ -40,8 +40,7 @@
         const timezone = config.timezone || 'UTC';
         const currentDt = config.current_dt || '';
 
-        // Localize the current date the same way the main dashboard does (Intl.DateTimeFormat),
-        // so weekday/month names match the selected language.
+        // Format the current date the same way the main dashboard does (Intl.DateTimeFormat).
         try {
             const dateFormatter = new Intl.DateTimeFormat(locale, {
                 weekday: 'long',
