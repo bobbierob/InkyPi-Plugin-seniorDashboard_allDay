@@ -11,6 +11,16 @@ FONT_SIZES = {
 # The plugin is English-only. LOCALE is passed to Intl.DateTimeFormat for the offline screen's date.
 LOCALE = "en"
 
+# Calendar marker colours, in the order new calendars get them. Pure panel colours, so they show
+# cleanly on the e-paper display.
+CALENDAR_COLORS = [
+    ("#0000FF", "Blue"),
+    ("#FF0000", "Red"),
+    ("#000000", "Black"),
+    ("#FFFF00", "Yellow"),
+    ("#00FF00", "Green"),
+]
+
 # UI strings.
 LABELS = {
     "allDayText": "All day",

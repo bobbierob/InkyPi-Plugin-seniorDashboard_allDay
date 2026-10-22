@@ -20,7 +20,7 @@
                     {% for day in agenda %}
                     {% set day_index = loop.index0 %}
                     {% for item in day.entries %}
-                    <tr class="agenda-row{% if loop.first %} day-start{% endif %}{% if item.placeholder %} placeholder{% endif %}" data-day="{{ day_index }}">
+                    <tr class="agenda-row{% if loop.first %} day-start{% endif %}{% if day.is_today %} today{% endif %}{% if item.placeholder %} placeholder{% endif %}" data-day="{{ day_index }}">
                         {% if loop.first %}
                         <td class="agenda-date{% if day.is_today %} is-today{% endif %}" rowspan="{{ day.entries|length }}">
                             {% if day.is_today %}
@@ -33,7 +33,7 @@
                         {% endif %}
                         <td class="agenda-time">{{ item.time }}</td>
                         <td class="agenda-what">
-                            <div class="agenda-line"><span class="agenda-title">{{ item.title }}</span><span class="agenda-more"></span></div>
+                            <div class="agenda-line">{% if item.color %}<span class="agenda-cal" style="background-color: {{ item.color }}"></span>{% endif %}<span class="agenda-title">{{ item.title }}</span><span class="agenda-more"></span></div>
                         </td>
                     </tr>
                     {% endfor %}
@@ -129,7 +129,8 @@
         //   3. then they go too, the 3rd before the 2nd;
         //   4. today, which may take the whole list, loses events from the end as a last resort.
         // A trimmed day ends with "+N more" on its last shown event, so each hidden event saves a
-        // whole row. Titles never wrap (they are cut off with "…"), so every row is one line.
+        // whole row. Later days' titles are cut off with "…"; today's wrap, so rows can differ in
+        // height, which is why fitting measures instead of counting rows.
         function fitToScreen() {
             const box = document.getElementById('calendar');
             const table = box && box.querySelector('.agenda');

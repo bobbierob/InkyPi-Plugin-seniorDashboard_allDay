@@ -1,5 +1,5 @@
 from plugins.base_plugin.base_plugin import BasePlugin
-from plugins.seniorDashboard_allDay.constants import LOCALE, LABELS, FONT_SIZES, WEATHER_ICONS
+from plugins.seniorDashboard_allDay.constants import CALENDAR_COLORS, LOCALE, LABELS, FONT_SIZES, WEATHER_ICONS
 from plugins.seniorDashboard_allDay import reboot_manager
 from plugins.seniorDashboard_allDay.reboot_manager import REBOOT_DELAY_SECONDS
 from utils.app_utils import get_font
@@ -7,6 +7,7 @@ from PIL import ImageColor, Image, ImageDraw
 import icalendar
 import recurring_ical_events
 import logging
+import re
 import requests
 from datetime import date, datetime, timedelta
 import pytz
@@ -36,6 +37,7 @@ class SeniorDashboardAllDay(BasePlugin):
     def generate_settings_template(self):
         template_params = super().generate_settings_template()
         template_params['style_settings'] = True
+        template_params['calendar_colors'] = CALENDAR_COLORS
         return template_params
 
     def generate_image(self, settings, device_config):
@@ -118,10 +120,7 @@ class SeniorDashboardAllDay(BasePlugin):
         The events are *unfiltered* within the ~2-week window; date-relative filtering happens at
         render time (_filter_active_events) so the cache stays reusable across multiple days.
         """
-        calendar_colors = settings.get('calendarColors[]')
-        default_color = '#007BFF'
-        if not calendar_colors or len(calendar_colors) < len(calendar_urls):
-            calendar_colors = [default_color] * len(calendar_urls)
+        calendar_colors = self._calendar_colors(settings, len(calendar_urls))
 
         timezone = device_config.get_config("timezone", default="America/New_York")
         units = settings.get("temperatureUnit") or "metric"
@@ -176,10 +175,12 @@ class SeniorDashboardAllDay(BasePlugin):
         labels = LABELS
         # The list covers the whole fetched window; the template drops the days that don't fit.
         view_start, view_end = self.get_view_range(current_dt)
-        agenda = self._build_agenda(events, current_dt, tz, (view_end - view_start).days, time_format, labels)
+        colors = self._calendar_colors(settings, len(settings.get("calendarURLs[]") or []))
+        agenda = self._build_agenda(events, current_dt, tz, (view_end - view_start).days, time_format, labels,
+                                    colors if len(set(colors)) > 1 else None)
 
         template_params = {
-            "title": f"{current_dt:%A}, {current_dt:%B} {current_dt.day}, {current_dt.year}",
+            "title": f"{current_dt:%A}, {current_dt:%B} {current_dt.day}",
             "agenda": agenda,
             "plugin_settings": settings,
             "font_scale": FONT_SIZES.get(settings.get("fontSize", "normal")),
@@ -376,15 +377,19 @@ class SeniorDashboardAllDay(BasePlugin):
             return f"{hour:02d}:00"
         return f"{(hour + 11) % 12 + 1}{'am' if hour < 12 else 'pm'}"
 
-    def _build_agenda(self, events, current_dt, tz, days, time_format, labels):
+    def _build_agenda(self, events, current_dt, tz, days, time_format, labels, calendar_colors=None):
         """Group events into the days they fall on, for the calendar list.
 
         Returns today (always, with a placeholder when nothing is left today) and each later day
         in the window that has events:
-            [{"is_today", "weekday" ("Fri"), "month_day" ("Oct 23"), "entries": [{"time", "title"}]}]
+            [{"is_today", "weekday" ("Fri"), "month_day" ("Oct 23"),
+              "entries": [{"time", "title", "color"}]}]
         Multi-day events appear on every day they cover: all-day events as "All day"; timed ones
         as "from 11pm" on the first day, "All day" in between and "until 1am" on the last.
         Within a day, all-day items come first, then by start time.
+        With calendar_colors (one per configured calendar; None when they'd all look the same),
+        each entry carries its calendar's colour for the marker dot. The colour is looked up from
+        the current settings, so a changed colour shows at once, even on cached events.
         """
         today = current_dt.date()
         by_day = {today + timedelta(days=i): [] for i in range(days)}
@@ -395,6 +400,11 @@ class SeniorDashboardAllDay(BasePlugin):
                 continue
             all_day = ev.get("allDay", False)
             title = ev.get("title") or ""
+            color = None
+            if calendar_colors:
+                index = ev.get("calendar")
+                color = (calendar_colors[index] if isinstance(index, int) and 0 <= index < len(calendar_colors)
+                         else ev.get("backgroundColor"))
             day = max(start.date(), today)
             while day <= last_date and day in by_day:
                 first, last = day == start.date(), day == last_date
@@ -409,7 +419,7 @@ class SeniorDashboardAllDay(BasePlugin):
                     time, sort_key = f"{labels['from']} {self._event_clock(start, time_format)}", (1, start.hour * 60 + start.minute)
                 else:
                     time, sort_key = f"{labels['until']} {self._event_clock(end, time_format)}", (1, 0)
-                by_day[day].append((sort_key, title, time))
+                by_day[day].append((sort_key, title, time, color))
                 day += timedelta(days=1)
 
         agenda = []
@@ -417,7 +427,7 @@ class SeniorDashboardAllDay(BasePlugin):
             if not items and day != today:
                 continue
             items.sort(key=lambda item: (item[0], item[1].lower()))
-            entries = [{"time": time, "title": title} for _, title, time in items]
+            entries = [{"time": time, "title": title, "color": color} for _, title, time, color in items]
             if not entries:
                 entries = [{"time": "", "title": labels["nothingMoreToday"], "placeholder": True}]
             agenda.append({
@@ -427,6 +437,21 @@ class SeniorDashboardAllDay(BasePlugin):
                 "entries": entries,
             })
         return agenda
+
+    @staticmethod
+    def _calendar_colors(settings, count):
+        """One marker colour per configured calendar: the colour picked in the settings, or the
+        next unused colour from CALENDAR_COLORS for calendars without a valid one."""
+        picked = settings.get("calendarColors[]") or []
+        palette = [c for c, _ in CALENDAR_COLORS]
+        colors = []
+        for i in range(count):
+            color = picked[i] if i < len(picked) else None
+            if not (isinstance(color, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", color)):
+                unused = [c for c in palette if c not in colors]
+                color = (unused or palette)[0]
+            colors.append(color)
+        return colors
 
     @staticmethod
     def _event_clock(dt, time_format):
@@ -444,7 +469,7 @@ class SeniorDashboardAllDay(BasePlugin):
         returned (and cached) list stays reusable across multiple days of an offline outage.
         """
         parsed_events = []
-        for calendar_url, color in zip(calendar_urls, colors):
+        for index, (calendar_url, color) in enumerate(zip(calendar_urls, colors)):
             cal = self.fetch_calendar(calendar_url)
             events = recurring_ical_events.of(cal).between(start_range, end_range)
             contrast_color = self.get_contrast_color(color)
@@ -455,6 +480,7 @@ class SeniorDashboardAllDay(BasePlugin):
 
                 parsed_event = {
                     "title": event_title,
+                    "calendar": index,
                     "start": start,
                     "backgroundColor": color,
                     "textColor": contrast_color,

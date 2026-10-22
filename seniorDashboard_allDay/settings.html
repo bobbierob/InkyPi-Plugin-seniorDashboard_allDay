@@ -4,7 +4,7 @@
 <div>
     <label class="form-label">Calendars:</label>
     <div id="calendarList"></div>
-    <button type="button" id="addCalendarBtn" class="form-input collapsible" onclick="addCalendarInput('')">Add
+    <button type="button" id="addCalendarBtn" class="form-input collapsible" onclick="addCalendarInput('', '')">Add
         Calendar</button>
 </div>
 
@@ -58,7 +58,17 @@
 </div>
 
 <script>
-    function addCalendarInput(url = '') {
+    // Marker colours for each calendar's dot on the dashboard (CALENDAR_COLORS in constants.py).
+    const CALENDAR_COLORS = {{ calendar_colors | tojson }};
+
+    // The first palette colour no other calendar uses yet, for a newly added calendar.
+    function nextCalendarColor() {
+        const used = Array.from(document.querySelectorAll('select[name="calendarColors[]"]')).map((s) => s.value);
+        const free = CALENDAR_COLORS.find(([hex]) => !used.includes(hex));
+        return (free || CALENDAR_COLORS[0])[0];
+    }
+
+    function addCalendarInput(url = '', color = '') {
         const calendarList = document.getElementById('calendarList');
 
         const wrapper = document.createElement('div');
@@ -73,6 +83,22 @@
         urlInput.classList.add('form-input');
         urlInput.value = url;
 
+        // Colour of this calendar's dot beside its events.
+        const colorSelect = document.createElement('select');
+        colorSelect.name = 'calendarColors[]';
+        colorSelect.classList.add('form-input', 'calendar-color');
+        colorSelect.title = "Colour of this calendar's dot on the dashboard";
+        colorSelect.style.flex = '0 0 auto';
+        colorSelect.style.width = 'auto';
+        CALENDAR_COLORS.forEach(([hex, name]) => {
+            const option = document.createElement('option');
+            option.value = hex;
+            option.textContent = '● ' + name;
+            option.style.color = hex === '#FFFF00' ? '#b8a000' : hex;
+            colorSelect.appendChild(option);
+        });
+        colorSelect.value = CALENDAR_COLORS.some(([hex]) => hex === color) ? color : nextCalendarColor();
+
         const removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.innerText = '✕';
@@ -80,6 +106,7 @@
         removeBtn.onclick = () => wrapper.remove();
 
         wrapper.appendChild(urlInput);
+        wrapper.appendChild(colorSelect);
         wrapper.appendChild(removeBtn);
 
         calendarList.appendChild(wrapper);
@@ -101,8 +128,10 @@
             longitude = pluginSettings.longitude != null && pluginSettings.longitude !== "" ? pluginSettings.longitude : "";
 
             if (pluginSettings["calendarURLs[]"]) {
-                calendars = pluginSettings["calendarURLs[]"].map((url) => ({
-                    url: url || ''
+                const colors = pluginSettings["calendarColors[]"] || [];
+                calendars = pluginSettings["calendarURLs[]"].map((url, i) => ({
+                    url: url || '',
+                    color: colors[i] || ''
                 }));
             }
         }
@@ -113,8 +142,8 @@
         document.getElementById('longitude').value = longitude;
 
         // populate calendars
-        calendars.forEach(({ url }) => {
-            addCalendarInput(url);
+        calendars.forEach(({ url, color }) => {
+            addCalendarInput(url, color);
         });
 
         // Map picker for weather location (like weather plugin)

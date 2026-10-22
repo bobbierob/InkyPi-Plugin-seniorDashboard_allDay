@@ -279,9 +279,9 @@ body,
   margin-left: auto;
 }
 
-/* Calendar: a plain day list. The date column carries "Today" or "Fri / Oct 23"; a heavy rule
-   separates days and a green bar marks today. Rows are one line each (titles are cut off with an
-   ellipsis), so the fit script trims whole rows. */
+/* Calendar: a plain day list. The date column carries "Today" (white on green) or "Fri / Oct 23"; a
+   heavy rule separates days. Today's titles wrap; later days' titles are cut off with an ellipsis
+   to keep them to one line. */
 .calendar {
   width: 100%;
   height: 100%;
@@ -321,8 +321,8 @@ body,
 }
 
 .agenda-date.is-today {
-  box-shadow: inset 6px 0 0 #00FF00;
-  padding-left: 16px !important;
+  background-color: #00FF00;
+  color: #FFFFFF;
 }
 
 .agenda-weekday {
@@ -352,6 +352,18 @@ body,
   align-items: baseline;
 }
 
+/* Which calendar the event is from: a dot in that calendar's colour (set per calendar in the
+   settings). Outlined so yellow still shows on white. Only drawn with two or more colours. */
+.agenda-cal {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 0.7em;
+  height: 0.7em;
+  border-radius: 50%;
+  border: 1px solid #000000;
+  margin-right: -2px;
+}
+
 .agenda-title {
   flex: 1 1 auto;
   min-width: 0;
@@ -364,6 +376,22 @@ body,
   flex: 0 0 auto;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* Today's events are shown in full: long titles wrap onto more lines. The dot stays by the first
+   line and "+N more" lines up with the last. */
+.agenda .today .agenda-title {
+  white-space: normal;
+  overflow: visible;
+}
+
+.agenda .today .agenda-line {
+  align-items: last baseline;
+}
+
+.agenda .today .agenda-cal {
+  align-self: flex-start;
+  margin-top: 0.35em;
 }
 
 .agenda-more:empty {

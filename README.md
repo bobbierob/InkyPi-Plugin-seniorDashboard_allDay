@@ -19,7 +19,7 @@ No additional dependencies whatsoever.
 **Settings:**
 ![Screenshot of settings of InkyPi-Plugin-seniorDashboard_allDay](./settings.png)
 The dashboard is in English.
-You can add multiple calendars; their events are merged into one list.
+You can add multiple calendars; their events are merged into one list. Pick a colour for each calendar (blue, red, black, yellow or green): with two or more calendars, a dot in that colour before each event shows which calendar it came from.
 Location setting for the weather, picked on a map (Open-Meteo covers the whole world); the weather is fetched for exactly that spot.
 Temperature unit can be set to **Celsius (°C)** or **Fahrenheit (°F)**; the conversion is done by the weather API so the values are always correct.
 Font size for the Calendar listing.
